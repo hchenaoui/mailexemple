@@ -1,0 +1,242 @@
+<script type="text/javascript">
+        var gk_isXlsx = false;
+        var gk_xlsxFileLookup = {};
+        var gk_fileData = {};
+        function filledCell(cell) {
+          return cell !== '' && cell != null;
+        }
+        function loadFileData(filename) {
+        if (gk_isXlsx && gk_xlsxFileLookup[filename]) {
+            try {
+                var workbook = XLSX.read(gk_fileData[filename], { type: 'base64' });
+                var firstSheetName = workbook.SheetNames[0];
+                var worksheet = workbook.Sheets[firstSheetName];
+
+                // Convert sheet to JSON to filter blank rows
+                var jsonData = XLSX.utils.sheet_to_json(worksheet, { header: 1, blankrows: false, defval: '' });
+                // Filter out blank rows (rows where all cells are empty, null, or undefined)
+                var filteredData = jsonData.filter(row => row.some(filledCell));
+
+                // Heuristic to find the header row by ignoring rows with fewer filled cells than the next row
+                var headerRowIndex = filteredData.findIndex((row, index) =>
+                  row.filter(filledCell).length >= filteredData[index + 1]?.filter(filledCell).length
+                );
+                // Fallback
+                if (headerRowIndex === -1 || headerRowIndex > 25) {
+                  headerRowIndex = 0;
+                }
+
+                // Convert filtered JSON back to CSV
+                var csv = XLSX.utils.aoa_to_sheet(filteredData.slice(headerRowIndex)); // Create a new sheet from filtered array of arrays
+                csv = XLSX.utils.sheet_to_csv(csv, { header: 1 });
+                return csv;
+            } catch (e) {
+                console.error(e);
+                return "";
+            }
+        }
+        return gk_fileData[filename] || "";
+        }
+        </script><!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Recherche et Ajout d'Adresse E-mail avec Google Sheet</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 600px;
+            margin: 20px auto;
+            padding: 20px;
+            text-align: center;
+        }
+        input, button {
+            padding: 10px;
+            margin: 10px;
+            font-size: 16px;
+        }
+        #result {
+            margin-top: 20px;
+            color: #333;
+        }
+        .error {
+            color: red;
+        }
+        .success {
+            color: green;
+        }
+        .form-section {
+            margin-top: 20px;
+            border-top: 1px solid #ccc;
+            padding-top: 20px;
+        }
+        button:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+    </style>
+</head>
+<body>
+    <h1>Recherche et Ajout d'Adresse E-mail</h1>
+    <p>Utilisez le Google Sheet partagé pour rechercher ou ajouter des e-mails.</p>
+    <button id="connectButton">Connexion au Google Sheet</button>
+    
+    <h2>Rechercher un e-mail</h2>
+    <input type="text" id="nameInput" placeholder="Entrez le nom à rechercher">
+    <button id="searchButton" disabled>Rechercher</button>
+    <div id="result"></div>
+
+    <div class="form-section">
+        <h2>Ajouter une entrée</h2>
+        <input type="text" id="newNameInput" placeholder="Entrez le nom">
+        <input type="email" id="newEmailInput" placeholder="Entrez l'e-mail">
+        <button id="addButton" disabled>Ajouter au Sheet</button>
+    </div>
+
+    <script src="https://apis.google.com/js/api.js"></script>
+    <script>
+        const API_KEY = 'AIzaSyDty235ZknSIz24_SSkS3FqaNgxjAXoGkk'; // Votre clé API Google
+        const CLIENT_ID = 'VOTRE_CLIENT_ID'; // Remplacez par votre Client ID OAuth
+        const SHEET_ID = '1Ai5NUV3pYGNj0RwBqaimEEY4lkHrqytWiHiTywN3yFY'; // ID de votre Google Sheet
+        let gapiInited = false;
+        let tokenClient;
+
+        // Initialiser l'API Google
+        function initGapi() {
+            gapi.load('client', async () => {
+                try {
+                    await gapi.client.init({
+                        apiKey: API_KEY,
+                        discoveryDocs: ['https://sheets.googleapis.com/$discovery/rest?version=v4'],
+                    });
+                    gapiInited = true;
+                    document.getElementById('result').innerText = 'API Google Sheets chargée.';
+                    enableButtons();
+                } catch (error) {
+                    document.getElementById('result').innerHTML = `<span class="error">Erreur d'initialisation : ${error.message}</span>`;
+                }
+            });
+        }
+
+        // Initialiser le client OAuth
+        function initTokenClient() {
+            tokenClient = google.accounts.oauth2.initTokenClient({
+                client_id: CLIENT_ID,
+                scope: 'https://www.googleapis.com/auth/spreadsheets',
+                callback: (tokenResponse) => {
+                    if (tokenResponse.access_token) {
+                        gapi.client.setToken({ access_token: tokenResponse.access_token });
+                        document.getElementById('result').innerText = 'Authentification réussie. Prêt à utiliser le Sheet.';
+                        enableButtons();
+                    } else {
+                        document.getElementById('result').innerHTML = '<span class="error">Échec de l\'authentification.</span>';
+                    }
+                },
+            });
+        }
+
+        // Activer les boutons après initialisation
+        function enableButtons() {
+            document.getElementById('searchButton').disabled = false;
+            document.getElementById('addButton').disabled = false;
+        }
+
+        // Charger le Google Sheet (authentification)
+        async function loadSheet() {
+            const resultDiv = document.getElementById('result');
+
+            if (!gapiInited) {
+                resultDiv.innerHTML = '<span class="error">API Google Sheets non chargée.</span>';
+                return;
+            }
+
+            try {
+                tokenClient.requestAccessToken();
+            } catch (error) {
+                resultDiv.innerHTML = `<span class="error">Erreur lors de la connexion : ${error.message}</span>`;
+            }
+        }
+
+        // Rechercher un e-mail
+        async function searchEmail() {
+            const nameInput = document.getElementById('nameInput').value.trim();
+            const resultDiv = document.getElementById('result');
+
+            if (!gapi.client.getToken()) {
+                resultDiv.innerHTML = '<span class="error">Veuillez vous connecter au Google Sheet d\'abord.</span>';
+                return;
+            }
+
+            if (!nameInput) {
+                resultDiv.innerHTML = '<span class="error">Veuillez entrer un nom.</span>';
+                return;
+            }
+
+            try {
+                const response = await gapi.client.sheets.spreadsheets.values.get({
+                    spreadsheetId: SHEET_ID,
+                    range: 'Sheet1!A:B', // Colonnes A (Nom) et B (Email)
+                });
+
+                const values = response.result.values || [];
+                const result = values.find(row => row[0] && row[0].toLowerCase() === nameInput.toLowerCase());
+
+                if (result && result[1]) {
+                    resultDiv.innerHTML = `<span class="success">E-mail trouvé : ${result[1]}</span>`;
+                } else {
+                    resultDiv.innerHTML = `<span class="error">Aucun e-mail trouvé pour ce nom.</span>';
+                }
+            } catch (error) {
+                resultDiv.innerHTML = `<span class="error">Erreur : ${error.message}</span>`;
+            }
+        }
+
+        // Ajouter une entrée
+        async function addEntry() {
+            const newName = document.getElementById('newNameInput').value.trim();
+            const newEmail = document.getElementById('newEmailInput').value.trim();
+            const resultDiv = document.getElementById('result');
+
+            if (!gapi.client.getToken()) {
+                resultDiv.innerHTML = '<span class="error">Veuillez vous connecter au Google Sheet d\'abord.</span>';
+                return;
+            }
+
+            if (!newName || !newEmail) {
+                resultDiv.innerHTML = '<span class="error">Veuillez entrer un nom et un e-mail valides.</span>';
+                return;
+            }
+
+            try {
+                await gapi.client.sheets.spreadsheets.values.append({
+                    spreadsheetId: SHEET_ID,
+                    range: 'Sheet1!A:B',
+                    valueInputOption: 'RAW',
+                    resource: {
+                        values: [[newName, newEmail]],
+                    },
+                });
+
+                resultDiv.innerHTML = `<span class="success">Entrée ajoutée : ${newName} (${newEmail}).</span>`;
+                document.getElementById('newNameInput').value = '';
+                document.getElementById('newEmailInput').value = '';
+            } catch (error) {
+                resultDiv.innerHTML = `<span class="error">Erreur : ${error.message}</span>`;
+            }
+        }
+
+        // Attacher les gestionnaires d'événements
+        document.getElementById('connectButton').addEventListener('click', loadSheet);
+        document.getElementById('searchButton').addEventListener('click', searchEmail);
+        document.getElementById('addButton').addEventListener('click', addEntry);
+
+        // Charger les scripts Google
+        window.onload = function() {
+            initGapi();
+            initTokenClient();
+        };
+    </script>
+    <script async defer src="https://accounts.google.com/gsi/client"></script>
+</body>
+</html>
